@@ -13,6 +13,7 @@ const client = new line.messagingApi.MessagingApiClient({
 // const client = new line.messagingApi.MessagingApiClient(config);
 
 export async function POST(req: NextRequest) {
+  console.log("[webhook] request received");
   const body = await req.text();
   const signature = req.headers.get("x-line-signature") ?? "";
 
