@@ -124,3 +124,49 @@ export async function verifySlipImage(
     return true;
   }
 }
+
+// แยกชื่อ-นามสกุลและเลขห้องจากข้อความเดียว
+export async function extractNameAndRoom(
+  message: string
+): Promise<{ name: string; room: string } | null> {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+
+  const prompt = `จากข้อความนี้ ให้แยกชื่อ-นามสกุล และหมายเลขห้องออกมา
+ข้อความ: "${message}"
+
+ตอบกลับเป็น JSON เท่านั้น ห้ามมีข้อความอื่นนอกเหนือจาก JSON รูปแบบนี้:
+{"name": "ชื่อที่แยกได้", "room": "เลขห้องที่แยกได้"}
+
+ถ้าแยกไม่ได้ทั้งชื่อและเลขห้อง ให้ตอบ:
+{"name": null, "room": null}`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: {
+        temperature: 1.0,
+        maxOutputTokens: 1024,
+      },
+    });
+
+    const finishReason = response.candidates?.[0]?.finishReason;
+    console.log(`[gemini-extract] finishReason=${finishReason}`);
+
+    if (finishReason === "MAX_TOKENS") return null;
+
+    const text = response.text?.trim() ?? "";
+    console.log(`[gemini-extract] raw=${text}`);
+
+    // ลบ markdown code block ถ้ามี
+    const cleaned = text.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(cleaned);
+
+    if (!parsed.name || !parsed.room) return null;
+
+    return { name: parsed.name, room: parsed.room };
+  } catch (err) {
+    console.error("[gemini-extract] error:", err);
+    return null;
+  }
+}

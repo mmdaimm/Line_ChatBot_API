@@ -1,7 +1,5 @@
 type SlipSession = {
-  step: "waiting_image" | "waiting_name" | "waiting_room";
-  name?: string;
-  room?: string;
+  step: "waiting_image" | "waiting_info";
   imageUrl?: string;
 };
 
