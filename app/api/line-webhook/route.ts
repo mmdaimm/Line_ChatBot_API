@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     events.map(async (event: any) => {
       // กรองเฉพาะข้อความ text เท่านั้น
       if (event.type !== "message" || event.message.type !== "text") return;
-
+      console.log("[debug] source:", JSON.stringify(event.source));
       const userMessage = event.message.text;
       const replyToken = event.replyToken;
 
