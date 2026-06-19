@@ -74,3 +74,53 @@ export async function askGemini(
     return DEFAULT_REPLY;
   }
 }
+
+// ตรวจสอบว่ารูปเป็นสลิปโอนเงินไหม
+export async function verifySlipImage(
+  imageBuffer: Buffer
+): Promise<boolean> {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+
+  const base64Image = imageBuffer.toString("base64");
+
+  const prompt = `ดูรูปนี้แล้วตอบแค่คำเดียวว่า "YES" หรือ "NO"
+ตอบ YES ถ้ารูปนี้เป็นสลิปโอนเงิน ใบเสร็จการโอนเงิน หรือหน้าจอแอปธนาคารที่แสดงการทำธุรกรรมโอนเงิน
+ตอบ NO ถ้าไม่ใช่ เช่น เป็นรูปคน รูปสัตว์ รูปอาหาร รูปสถานที่ หรือภาพอื่นๆ ที่ไม่เกี่ยวกับการโอนเงิน
+ตอบแค่ YES หรือ NO เท่านั้น ห้ามตอบอย่างอื่น`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: "image/jpeg",
+                data: base64Image,
+              },
+            },
+          ],
+        },
+      ],
+      config: {
+        temperature: 1.0,
+        maxOutputTokens: 1024,
+      },
+    });
+
+    const finishReason = response.candidates?.[0]?.finishReason;
+    console.log(`[gemini-vision] finishReason=${finishReason}`);
+
+    const answer = response.text?.trim().toUpperCase() ?? "";
+    console.log(`[gemini-vision] answer=${answer}`);
+
+    return answer.includes("YES");
+  } catch (err) {
+    console.error("[gemini-vision] error:", err);
+    // ถ้า AI ตรวจสอบไม่ได้ ให้ผ่านไปก่อน (ป้องกันบล็อกลูกค้าจริง)
+    return true;
+  }
+}
