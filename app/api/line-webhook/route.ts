@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as line from "@line/bot-sdk";
 import { getFaqCsv } from "@/lib/sheet";
 import { uploadImageToDrive, appendSlipRecord } from "@/lib/google";
-import { askGemini, verifySlipImage } from "@/lib/gemini";
+import { askGemini, verifySlipImage, extractNameAndRoom } from "@/lib/gemini";
 import {
   startSlipFlow,
   getSession,
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
-// จัดการขั้นตอนสนทนาเก็บชื่อ/ห้อง
+// จัดการขั้นตอนรับชื่อ+ห้องพร้อมกัน
 async function handleSlipFlow(
   userId: string,
   message: string,
@@ -91,62 +91,63 @@ async function handleSlipFlow(
 ) {
   const session = getSession(userId)!;
 
-  if (session.step === "waiting_name") {
-    updateSession(userId, { name: message, step: "waiting_room" });
+  if (session.step !== "waiting_info") return;
+
+  const extracted = await extractNameAndRoom(message);
+
+  if (!extracted) {
     await client.replyMessage({
       replyToken,
       messages: [
-        { type: "text", text: "ขอบคุณค่ะ กรุณาแจ้งหมายเลขห้องด้วยนะคะ" },
+        {
+          type: "text",
+          text: "ขออภัยค่ะ ไม่สามารถอ่านชื่อและเลขห้องได้ กรุณาพิมพ์ใหม่ เช่น \"สมชาย ใจดี ห้อง 15\" ค่ะ",
+        },
       ],
     });
     return;
   }
 
-if (session.step === "waiting_room") {
-    const room = message;
+  const { name, room } = extracted;
 
-    try {
-      // บันทึกลง Google Sheet (รูปถูกอัปโหลดไว้แล้วตอนตรวจสอบผ่าน)
-      await appendSlipRecord(room, session.name!, session.imageUrl!);
+  try {
+    await appendSlipRecord(room, name, session.imageUrl!);
 
-      await client.replyMessage({
-        replyToken,
+    await client.replyMessage({
+      replyToken,
+      messages: [
+        {
+          type: "text",
+          text: `รับสลิปเรียบร้อยแล้วค่ะ ✅\nชื่อ: ${name}\nห้อง: ${room}\nขอบคุณนะคะ 😊`,
+        },
+      ],
+    });
+
+    if (process.env.LINE_OWNER_GROUP_ID) {
+      await client.pushMessage({
+        to: process.env.LINE_OWNER_GROUP_ID,
         messages: [
           {
             type: "text",
-            text: `รับสลิปเรียบร้อยแล้วค่ะ ✅\nชื่อ: ${session.name}\nห้อง: ${room}\nขอบคุณนะคะ 😊`,
-          },
-        ],
-      });
-
-      // แจ้งเจ้าของหอในกลุ่ม LINE
-      if (process.env.LINE_OWNER_GROUP_ID) {
-        await client.pushMessage({
-          to: process.env.LINE_OWNER_GROUP_ID,
-          messages: [
-            {
-              type: "text",
-              text: `📥 มีการแจ้งโอนเงินใหม่\nชื่อ: ${session.name}\nห้อง: ${room}\nดูรูปสลิป: ${session.imageUrl}`,
-            },
-          ],
-        });
-      }
-    } catch (err) {
-      console.error("[webhook] save slip error:", err);
-      await client.replyMessage({
-        replyToken,
-        messages: [
-          {
-            type: "text",
-            text: "ขออภัยค่ะ เกิดข้อผิดพลาดในการบันทึกข้อมูล กรุณาติดต่อหอพักโดยตรงค่ะ 📞 080-499-9116",
+            text: `📥 มีการแจ้งโอนเงินใหม่\nชื่อ: ${name}\nห้อง: ${room}\nดูรูปสลิป: ${session.imageUrl}`,
           },
         ],
       });
     }
-
-    clearSession(userId);
-    return;
+  } catch (err) {
+    console.error("[webhook] save slip error:", err);
+    await client.replyMessage({
+      replyToken,
+      messages: [
+        {
+          type: "text",
+          text: "ขออภัยค่ะ เกิดข้อผิดพลาดในการบันทึกข้อมูล กรุณาติดต่อหอพักโดยตรงค่ะ 📞 080-499-9116",
+        },
+      ],
+    });
   }
+
+  clearSession(userId);
 }
 
 // จัดการตอนลูกค้าส่งรูป (ไม่ว่าจะอยู่ขั้นตอนไหนก็ตรวจสอบได้เลย)
@@ -177,16 +178,16 @@ async function handleImageMessage(
     const fileName = `slip_${userId}_${Date.now()}.jpg`;
     const imageUrl = await uploadImageToDrive(imageBuffer, fileName);
 
-    // เริ่ม session ใหม่ พร้อมเก็บ imageUrl แล้วถามชื่อ
+    // เริ่ม session ใหม่ พร้อมเก็บ imageUrl แล้วถามชื่อ+ห้องพร้อมกัน
     startSlipFlow(userId);
-    updateSession(userId, { imageUrl, step: "waiting_name" });
+    updateSession(userId, { imageUrl, step: "waiting_info" });
 
     await client.replyMessage({
       replyToken,
       messages: [
         {
           type: "text",
-          text: "รับรูปสลิปเรียบร้อยค่ะ ✅ กรุณาแจ้งชื่อ-นามสกุลผู้โอนด้วยนะคะ",
+          text: "รับรูปสลิปเรียบร้อยค่ะ ✅ กรุณาแจ้งชื่อ-นามสกุล พร้อมหมายเลขห้องด้วยนะคะ เช่น \"สมชาย ใจดี ห้อง 15\"",
         },
       ],
     });
