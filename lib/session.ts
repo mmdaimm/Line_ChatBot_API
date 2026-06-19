@@ -1,14 +1,14 @@
 type SlipSession = {
-  step: "waiting_name" | "waiting_room" | "waiting_image";
+  step: "waiting_image" | "waiting_name" | "waiting_room";
   name?: string;
   room?: string;
+  imageUrl?: string;
 };
 
-// เก็บ session ไว้ใน memory โดยใช้ LINE userId เป็น key
 const sessions = new Map<string, SlipSession>();
 
 export function startSlipFlow(userId: string) {
-  sessions.set(userId, { step: "waiting_name" });
+  sessions.set(userId, { step: "waiting_image" });
 }
 
 export function getSession(userId: string): SlipSession | undefined {

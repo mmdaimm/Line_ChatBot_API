@@ -20,9 +20,6 @@ const blobClient = new line.messagingApi.MessagingApiBlobClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
 });
 
-// คำที่ใช้เริ่มขั้นตอนส่งสลิป
-const SLIP_TRIGGER_WORDS = ["ส่งสลิป", "แจ้งโอนเงิน", "แจ้งชำระเงิน", "โอนเงินแล้ว"];
-
 export async function POST(req: NextRequest) {
   const body = await req.text();
   const signature = req.headers.get("x-line-signature") ?? "";
@@ -60,21 +57,6 @@ export async function POST(req: NextRequest) {
       // ถ้าลูกค้าอยู่ระหว่างขั้นตอนส่งสลิปอยู่แล้ว
       if (session) {
         await handleSlipFlow(userId, userMessage, replyToken);
-        return;
-      }
-
-      // ถ้าลูกค้าพิมพ์คำเริ่มต้นส่งสลิป
-      if (SLIP_TRIGGER_WORDS.some((w) => userMessage.includes(w))) {
-        startSlipFlow(userId);
-        await client.replyMessage({
-          replyToken,
-          messages: [
-            {
-              type: "text",
-              text: "รับทราบค่ะ กรุณาแจ้งชื่อ-นามสกุลผู้โอนด้วยนะคะ 😊",
-            },
-          ],
-        });
         return;
       }
 
@@ -120,54 +102,59 @@ async function handleSlipFlow(
     return;
   }
 
-  if (session.step === "waiting_room") {
-    updateSession(userId, { room: message, step: "waiting_image" });
-    await client.replyMessage({
-      replyToken,
-      messages: [
-        {
-          type: "text",
-          text: "กรุณาส่งรูปสลิปโอนเงินได้เลยค่ะ 📸",
-        },
-      ],
-    });
-    return;
-  }
+if (session.step === "waiting_room") {
+    const room = message;
 
-  // ถ้าลูกค้าพิมพ์ข้อความแทนที่จะส่งรูปตอนรอรูป
-  if (session.step === "waiting_image") {
-    await client.replyMessage({
-      replyToken,
-      messages: [
-        { type: "text", text: "กรุณาส่งเป็นรูปภาพสลิปนะคะ 📸" },
-      ],
-    });
+    try {
+      // บันทึกลง Google Sheet (รูปถูกอัปโหลดไว้แล้วตอนตรวจสอบผ่าน)
+      await appendSlipRecord(room, session.name!, session.imageUrl!);
+
+      await client.replyMessage({
+        replyToken,
+        messages: [
+          {
+            type: "text",
+            text: `รับสลิปเรียบร้อยแล้วค่ะ ✅\nชื่อ: ${session.name}\nห้อง: ${room}\nขอบคุณนะคะ 😊`,
+          },
+        ],
+      });
+
+      // แจ้งเจ้าของหอในกลุ่ม LINE
+      if (process.env.LINE_OWNER_GROUP_ID) {
+        await client.pushMessage({
+          to: process.env.LINE_OWNER_GROUP_ID,
+          messages: [
+            {
+              type: "text",
+              text: `📥 มีการแจ้งโอนเงินใหม่\nชื่อ: ${session.name}\nห้อง: ${room}\nดูรูปสลิป: ${session.imageUrl}`,
+            },
+          ],
+        });
+      }
+    } catch (err) {
+      console.error("[webhook] save slip error:", err);
+      await client.replyMessage({
+        replyToken,
+        messages: [
+          {
+            type: "text",
+            text: "ขออภัยค่ะ เกิดข้อผิดพลาดในการบันทึกข้อมูล กรุณาติดต่อหอพักโดยตรงค่ะ 📞 080-499-9116",
+          },
+        ],
+      });
+    }
+
+    clearSession(userId);
     return;
   }
 }
 
-// จัดการตอนลูกค้าส่งรูปจริงๆ
+// จัดการตอนลูกค้าส่งรูป (ไม่ว่าจะอยู่ขั้นตอนไหนก็ตรวจสอบได้เลย)
 async function handleImageMessage(
   userId: string,
   messageId: string,
   replyToken: string
 ) {
-  const session = getSession(userId);
-
-  // ถ้าไม่ได้อยู่ในขั้นตอนส่งสลิป ไม่ต้องทำอะไร
-  if (!session || session.step !== "waiting_image") {
-    await client.replyMessage({
-      replyToken,
-      messages: [
-        {
-          type: "text",
-          text: 'หากต้องการแจ้งสลิปโอนเงิน กรุณาพิมพ์ "ส่งสลิป" ก่อนนะคะ 😊',
-        },
-      ],
-    });
-    return;
-  }
-
   try {
     // ดึงรูปจาก LINE
     const stream = await blobClient.getMessageContent(messageId);
@@ -181,60 +168,29 @@ async function handleImageMessage(
     const isSlip = await verifySlipImage(imageBuffer);
 
     if (!isSlip) {
-      await client.replyMessage({
-        replyToken,
-        messages: [
-          {
-            type: "text",
-            text: "รูปนี้ดูไม่เหมือนสลิปโอนเงินนะคะ กรุณาส่งรูปสลิปโอนเงินใหม่อีกครั้งค่ะ 📸",
-          },
-        ],
-      });
-      return; // ไม่บันทึก ไม่ล้าง session รอรูปใหม่
+      // ถ้าลูกค้าส่งรูปอื่นมาเฉยๆ (ไม่ใช่สลิป) ไม่ต้องตอบอะไร ปล่อยผ่าน
+      // เพื่อไม่ให้รบกวนตอนลูกค้าส่งรูปอื่นที่ไม่เกี่ยวกับสลิป
+      return;
     }
 
-    // อัปโหลดขึ้น Google Drive
-    const fileName = `slip_${session.room}_${Date.now()}.jpg`;
+    // ตรวจสอบผ่านแล้ว → อัปโหลดขึ้น Google Drive ทันที
+    const fileName = `slip_${userId}_${Date.now()}.jpg`;
     const imageUrl = await uploadImageToDrive(imageBuffer, fileName);
 
-    // บันทึกลง Google Sheet
-    await appendSlipRecord(session.room!, session.name!, imageUrl);
+    // เริ่ม session ใหม่ พร้อมเก็บ imageUrl แล้วถามชื่อ
+    startSlipFlow(userId);
+    updateSession(userId, { imageUrl, step: "waiting_name" });
 
-    // แจ้งลูกค้า
     await client.replyMessage({
       replyToken,
       messages: [
         {
           type: "text",
-          text: `รับสลิปเรียบร้อยแล้วค่ะ ✅\nชื่อ: ${session.name}\nห้อง: ${session.room}\nขอบคุณนะคะ 😊`,
+          text: "รับรูปสลิปเรียบร้อยค่ะ ✅ กรุณาแจ้งชื่อ-นามสกุลผู้โอนด้วยนะคะ",
         },
       ],
     });
-
-    // แจ้งเจ้าของหอในกลุ่ม LINE
-    if (process.env.LINE_OWNER_GROUP_ID) {
-      await client.pushMessage({
-        to: process.env.LINE_OWNER_GROUP_ID,
-        messages: [
-          {
-            type: "text",
-            text: `📥 มีการแจ้งโอนเงินใหม่\nชื่อ: ${session.name}\nห้อง: ${session.room}\nดูรูปสลิป: ${imageUrl}`,
-          },
-        ],
-      });
-    }
-
-    clearSession(userId);
   } catch (err) {
     console.error("[webhook] image processing error:", err);
-    await client.replyMessage({
-      replyToken,
-      messages: [
-        {
-          type: "text",
-          text: "ขออภัยค่ะ เกิดข้อผิดพลาดในการบันทึกสลิป กรุณาลองใหม่อีกครั้งหรือติดต่อหอพักโดยตรงค่ะ 📞 080-499-9116",
-        },
-      ],
-    });
   }
 }
