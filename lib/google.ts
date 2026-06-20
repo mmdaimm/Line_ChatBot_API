@@ -67,7 +67,7 @@ export async function appendSlipRecord(
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: process.env.SLIP_SHEET_ID!,
-    range: "Sheet1!A:D",
+    range: "ชีต1",
     valueInputOption: "USER_ENTERED",
     requestBody: {
       values: [[timestamp, room, name, imageUrl]],
