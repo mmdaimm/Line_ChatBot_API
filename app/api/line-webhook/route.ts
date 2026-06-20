@@ -36,50 +36,55 @@ export async function POST(req: NextRequest) {
 
   const events = JSON.parse(body).events;
 
-  await Promise.all(
-    events.map(async (event: any) => {
-      if (event.type !== "message") return;
+for (const event of events) {
+  if (event.type !== "message") continue;
 
-      const userId = event.source.userId;
-      const replyToken = event.replyToken;
+  const userId = event.source.userId;
+  const replyToken = event.replyToken;
 
-      // ===== กรณีลูกค้าส่งรูป =====
-      if (event.message.type === "image") {
-        await handleImageMessage(userId, event.message.id, replyToken);
-        return;
-      }
+  // ===== กรณีลูกค้าส่งรูป =====
+  if (event.message.type === "image") {
+    await handleImageMessage(
+      userId,
+      event.message.id,
+      replyToken
+    );
+    continue;
+  }
 
-      // ===== กรณีลูกค้าส่งข้อความ =====
-      if (event.message.type !== "text") return;
+  // ===== กรณีลูกค้าส่งข้อความ =====
+  if (event.message.type !== "text") continue;
 
-      const userMessage: string = event.message.text;
-      const session = getSession(userId);
+  const userMessage = event.message.text;
+  const session = getSession(userId);
 
-      // ถ้าลูกค้าอยู่ระหว่างขั้นตอนส่งสลิปอยู่แล้ว
-      if (session) {
-        await handleSlipFlow(userId, userMessage, replyToken);
-        return;
-      }
+  if (session) {
+    await handleSlipFlow(
+      userId,
+      userMessage,
+      replyToken
+    );
+    continue;
+  }
 
-      // ===== กรณีปกติ ถามตอบ FAQ ด้วย AI =====
-      let replyText = DEFAULT_REPLY;
-      try {
-        const csv = await getFaqCsv();
-        replyText = await askGemini(csv, userMessage);
-      } catch (err) {
-        console.error("[webhook] processing error:", err);
-      }
+  let replyText = DEFAULT_REPLY;
 
-      try {
-        await client.replyMessage({
-          replyToken,
-          messages: [{ type: "text", text: replyText }],
-        });
-      } catch (err) {
-        console.error("[webhook] reply error:", err);
-      }
-    })
-  );
+  try {
+    const csv = await getFaqCsv();
+    replyText = await askGemini(csv, userMessage);
+  } catch (err) {
+    console.error("[webhook] processing error:", err);
+  }
+
+  try {
+    await client.replyMessage({
+      replyToken,
+      messages: [{ type: "text", text: replyText }],
+    });
+  } catch (err) {
+    console.error("[webhook] reply error:", err);
+  }
+}
 
   return NextResponse.json({ ok: true });
 }
@@ -128,8 +133,6 @@ async function handleSlipFlow(
 
     if (process.env.LINE_OWNER_GROUP_ID) {
 
-      const viewUrl = `${process.env.APP_URL}/api/slip?key=` + encodeURIComponent(session.imageUrl!);
-
       await client.pushMessage({
         to: process.env.LINE_OWNER_GROUP_ID,
         messages: [
@@ -171,22 +174,22 @@ async function handleImageMessage(
     }
     const imageBuffer = Buffer.concat(chunks);
 
+    startSlipFlow(userId);
+
     // ให้ AI ตรวจสอบก่อนว่าเป็นรูปสลิปจริงไหม
     const isSlip = await verifySlipImage(imageBuffer);
 
     if (!isSlip) {
       // ถ้าลูกค้าส่งรูปอื่นมาเฉยๆ (ไม่ใช่สลิป) ไม่ต้องตอบอะไร ปล่อยผ่าน
       // เพื่อไม่ให้รบกวนตอนลูกค้าส่งรูปอื่นที่ไม่เกี่ยวกับสลิป
+      clearSession(userId);
       return;
     }
 
-    // ตรวจสอบผ่านแล้ว → อัปโหลดขึ้น Google Drive ทันที
-    // const fileName = "slip.jpg";
     // const imageUrl = await uploadImageToDrive(imageBuffer, fileName);
     const imageUrl = await uploadImageToR2(imageBuffer);
 
     // เริ่ม session ใหม่ พร้อมเก็บ imageUrl แล้วถามชื่อ+ห้องพร้อมกัน
-    startSlipFlow(userId);
     updateSession(userId, { imageUrl, step: "waiting_info" });
 
     await client.replyMessage({
