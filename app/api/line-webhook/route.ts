@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as line from "@line/bot-sdk";
 import { getFaqCsv } from "@/lib/sheet";
-import { uploadImageToDrive, appendSlipRecord } from "@/lib/google";
+import { appendSlipRecord } from "@/lib/google";
+import { uploadImageToR2 } from "@/lib/r2";
 import { askGemini, verifySlipImage, extractNameAndRoom } from "@/lib/gemini";
 import {
   startSlipFlow,
@@ -175,8 +176,9 @@ async function handleImageMessage(
     }
 
     // ตรวจสอบผ่านแล้ว → อัปโหลดขึ้น Google Drive ทันที
-    const fileName = `slip_${userId}_${Date.now()}.jpg`;
-    const imageUrl = await uploadImageToDrive(imageBuffer, fileName);
+    // const fileName = "slip.jpg";
+    // const imageUrl = await uploadImageToDrive(imageBuffer, fileName);
+    const imageUrl = await uploadImageToR2(imageBuffer);
 
     // เริ่ม session ใหม่ พร้อมเก็บ imageUrl แล้วถามชื่อ+ห้องพร้อมกัน
     startSlipFlow(userId);
