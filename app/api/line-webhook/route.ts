@@ -112,7 +112,9 @@ async function handleSlipFlow(
   const { name, room } = extracted;
 
   try {
-    await appendSlipRecord(room, name, session.imageUrl!);
+    const viewUrl = `${process.env.APP_URL}/api/slip?key=` + encodeURIComponent(session.imageUrl!);
+
+    await appendSlipRecord(room, name, viewUrl);
 
     await client.replyMessage({
       replyToken,
@@ -125,12 +127,15 @@ async function handleSlipFlow(
     });
 
     if (process.env.LINE_OWNER_GROUP_ID) {
+
+      const viewUrl = `${process.env.APP_URL}/api/slip?key=` + encodeURIComponent(session.imageUrl!);
+
       await client.pushMessage({
         to: process.env.LINE_OWNER_GROUP_ID,
         messages: [
           {
             type: "text",
-            text: `📥 มีการแจ้งโอนเงินใหม่\nชื่อ: ${name}\nห้อง: ${room}\nดูรูปสลิป: ${session.imageUrl}`,
+            text: `📥 มีการแจ้งโอนเงินใหม่\nชื่อ: ${name}\nห้อง: ${room}\nดูรูปสลิป: ${viewUrl}`,
           },
         ],
       });
