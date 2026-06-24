@@ -56,6 +56,25 @@ for (const event of events) {
   if (event.message.type !== "text") continue;
 
   const userMessage = event.message.text;
+  
+  // ===== ดักคำสั่งลับขอ userId =====
+  if (userMessage.trim() === "#myid") {
+    try {
+      await client.replyMessage({
+        replyToken,
+        messages: [
+          {
+            type: "text",
+            text: `รหัสประจำตัว LINE ของคุณคือ:\n\n${userId}\n\n(กดค้างที่ข้อความนี้เพื่อคัดลอกส่งให้แอดมินหอพักได้เลยค่ะ 😊)`,
+          },
+        ],
+      });
+    } catch (err) {
+      console.error("[webhook] reply #myid error:", err);
+    }
+    continue;
+  }
+
   const session = getSession(userId);
 
   if (session) {
